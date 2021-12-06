@@ -1,0 +1,216 @@
+---
+title: "Temporal Distribuition of NYC Shooting Incidents"
+author: "Will Roberts"
+date: "12/6/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+require(zoo)
+require(suncalc)
+
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(zoo)
+library(suncalc)
+
+data = read.csv('https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD')
+```
+
+## NYPD Shooting Incidents Dataset
+
+The NYPD Shooting Incident dataset was obtained from the public data repository website Data.gov and includes data on reported shooting incidents in New York City from 2006 through the end of 2020. The data for 2021 is a separate file, and of course does not yet cover the whole year, so it will be omitted from this analysis.
+
+There are 23,585 shooting incidents included in the dataset from all five boroughs of New York City. Each incident has basic data included, including the race, age and sex of the perpetrator and victim, the location, and the time of occurrence in separate columns:
+
+```{r columns, echo=TRUE}
+names(data)
+```
+
+## Time Distribution of Shooting Incidents
+
+There are many possible ways to look at a dataset like this, such as shooting frequency and severity by race, sex, location, etc. For this project I chose to focus on the time distribution of shooting incidents to understand how shooting incidents vary throughout time of day, and across the months of the 14 years of the dataset. The causes of gun crime in a city like New York are complex, with many different factors contributing to interactions between people that become violent and involve guns. But underneath those factors are environmental variables that change over time in regular patterns. An analysis of the temporal distribution of shooting incidents can give us insight into that underlying environment and how it changes over the course of the year. 
+
+To start we need to remove the unnecessary columns from the data, and only keep the OCCUR_DATE and OCCUR_TIME columns. Then we will be able to aggregate and summarize the number of shooting incidents on different time scales. The columns will then be converted to POSIXct objects (a useful datetime format in R) and we can add columns for just the date and month (without the year), which will be necessary for some calculations. 
+
+```{r clean, echo=TRUE}
+# Select only relevant columns
+data <- data[c("OCCUR_DATE", "OCCUR_TIME")]
+# Set Time Zone for Calculations
+Sys.setenv(TZ="America/New_York")
+
+# Create new columns and format as POIXct objects
+data$OCCUR_DATE <- as.POSIXct(data$OCCUR_DATE, format="%m/%d/%Y")
+data$OCCUR_TIME <- as.POSIXct(data$OCCUR_TIME, format="%H:%M:%S")
+data$date_MD <- format(as.Date(data$OCCUR_DATE, format="%d/%m/%Y"),"%m/%d")
+data$month <- month(as.POSIXct(data$OCCUR_DATE, format="%d/%m/%Y"))
+names(data)
+```
+
+Next we can examine the data for any missing or NA values in the date columns.
+
+```{r NAs, echo=TRUE}
+# Test for NAs in remaining columns
+print(apply(data, 2, function(x) any(is.na(x))))
+```
+It seems there are no missing values in any of the relevant datset columns, so we can go forward with our analysis without further processing. 
+
+A first look at the temporal distribution of shooting incidents can be a plot looking at the mean number of daily shooting incidents over the course of the year, and also adding a seven day moving average to smooth out some of the noise.
+
+```{r daily shootings, echo=TRUE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+# Data For Plot of Shooting Frequency per Day
+day_counts <- data %>% group_by(date_MD) %>% summarise(n())
+colnames(day_counts) <- c('date', 'count')
+
+# Make counts an average of the 14 years
+day_counts$count <- day_counts$count /14
+
+# Add 7-Day moving average
+fill = mean(day_counts$count)
+day_counts$means <- sapply("left",function(x)zoo::rollmean(day_counts$count,7,align = x, fill=fill))
+day_counts$date <- as.POSIXct(day_counts$date, format="%m/%d")
+
+# plot both daily count and moving average
+ggplot(data=day_counts) + geom_point(aes(x= date, y= count, group=1, color='Daily Shootings', alpha=I(0.5))) + 
+  geom_line(aes(x= date, y= means, group=1, color='7 Day Moving Avg')) + scale_x_datetime(labels = date_format("%b")) +
+  ggtitle('Mean Shooting Frequency by Day 2006-2021') + xlab('Date')  + ylab('Mean Shootings per Day') +theme(plot.title = element_text(hjust = 0.5)) + 
+  theme(legend.position = c(.05, .95),legend.justification = c("left", "top"),legend.box.just = "left",legend.margin = margin(6, 6, 6, 6))
+
+```
+
+There is a lot of noise in the daily frequency of shooting over these 14 years of datas, with clear peaks and valleys even in the smoothed-out moving seven day average. This could be due to any number of reasons. Perhaps shootings are more likely to occur on weekends or there could be spikes around holidays or major public events like football games.  
+
+However, the noise largely goes away when zooming out and aggregating the data by month, indicated in the plot below. Here, you can clearly see a trend of lower numbers of shootings in the first few months of the year, a peak of increased shooting incidents starting in May and continuing throughout the summer months and decreasing again starting in September. 
+
+```{r monthly shootings, echo=TRUE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+month_counts <- data %>% group_by(month) %>% summarise(n())
+# Make counts an average of the 14 years
+colnames(month_counts) <- c('month', 'count')
+month_counts$count <- month_counts$count/14
+
+# Assign Months Text Labels
+month_counts$text_month <- c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+month_counts$text_month <- factor(month_counts$text_month, levels =month_counts$text_month, ordered=TRUE)
+
+ggplot(data=month_counts, aes(x= text_month, y= count, group=1, color='Shootings per Month')) + geom_line(stat="identity", color='blue') +
+  ggtitle('Mean Shooting Incident Frequency by Month 2006-2021') + xlab('Month of Year')  + ylab('Mean Shootings per Month')+theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(50, 220)
+```
+
+One possible explanation for this seasonal pattern of shooting incidents is colder winter weather in a Northern US city like New York, which has fairly severe cold winters that limit many kinds of human activity, perhaps even including gun crime. 
+
+Another way to look at the time distribution of shooting incidents is by the time of day they occurred, from hour zero just after midnight to hour 23. Do most shooting incidents occur during the day? Late at night?
+
+```{r hourly shootings, echo=TRUE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+# Second plot can be the number of shootings by hour of the day
+data$hour <- hour(as.POSIXlt(data$OCCUR_TIME, format="%H:%M:%S"))
+hour_counts <- data %>% group_by(hour) %>% summarise(n())
+colnames(hour_counts) <- c('hour', 'count')
+hour_counts$count <- hour_counts$count/14
+
+ggplot(data= hour_counts, aes(x= hour, y= count, group=1)) + geom_bar(stat="identity", fill='blue')  +
+  ggtitle('Mean Shooting Frequency by Hour of The Day 2006-2021') + xlab('Hour of Day')  + ylab('Meean Shooting Incidents per Hour') +
+  theme(plot.title = element_text(hjust = 0.5)) +ylim(0, 200) 
+
+```
+
+Looking at shooting incidents over the course of the day, we can see that most shootings actually tend to occur at night between 7 pm and 4 am. This could be due to any number of reasons, such as criminals with guns preferring to work under cover of darkness, or that most people are working or otherwise engaged during the day. Another factor could be increased alcohol and drug use during night time hours compared to the day time, which could lead to higher incidences of gun violence.
+
+Looking at this distribution made me wonder if the proportion of shootings during the day vs night time remains constant throughout the year or if it changes with the seasons. The winter months will have much longer nights than the summer, and if most shootings occur at night, why are there so few shooting incidents in From November through March?
+
+For this analysis I used a library called suncalc to calculate the angle of the sun to the horizon at the time each shooting incident occurred, calculated using the time, and the lat/long coordinates of the city. This allows us to classify the daylight conditions for the time each incident occurred, which change significantly over the course of the year.  
+
+```{r day night proportion, echo=TRUE, message=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+# Keep lat and long constant
+data$lat <- 40.7128
+data$lon <- 74.0060
+
+#  Caclculate the proportion of day/night shootings
+data$date <- as.POSIXct(data$OCCUR_TIME)
+alt <- getSunlightPosition(data=data, keep = "altitude")
+data$altitude <- alt$altitude
+
+data$light <- ifelse(data$altitude < 0, "Day", "Night")
+light_counts <- data %>% group_by(month, light) %>% summarise(n())
+colnames(light_counts) <- c('month', 'Light','count')
+
+month_labels <- c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
+month_breaks <- c(1,2,3,4,5,6,7,8,9,10,11,12)
+ggplot(light_counts, aes(fill=Light, y=count, x=month)) + 
+  geom_bar(position="fill", stat="identity") + scale_x_discrete(limits = month_breaks, labels =month_labels) +
+  ggtitle('Proportion of Day and Night Shootings 2006-2021 by Month') + xlab('Month')  + ylab('Proportion of Shootings in Day or Night') +
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+We can see that shooting incidents are about equally likely to occur during the day and night for the winter months, but during the summer months more shooting incidents tend to occur at night.
+
+Another way to look at this same comparison is a simple line plot of night and day shootings over time, which really brings the seasonal change in day/night proportion of shooting incidents to light. 
+
+```{r day night line plot, echo=TRUE, message=FALSE}
+light_counts$count <- light_counts$count/14
+
+ggplot(light_counts, aes(color=Light, y=count, x=month)) + geom_line() + scale_x_discrete(limits = month_breaks, labels =month_labels) +
+  ggtitle('Day and Night Shootings') + xlab('Month')  + ylab('Mean Monthly Shooting Incidents in Day/ Night') +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+It would appear that the increased proportion of shooting incidents occurring at night starts in May and continues through September, while in the rest of the year shooting incidents are almost equally likely to occur in day or night. 
+
+This is interesting because during the summer months nights are actually significantly shorter than they are in the winter, yet more shooting incidents occur at night during these months. My hypothesis is that the climate/temperature has a significant influence, where long cold nights depress shooting incidents in the winter, but warmer nights in summer result in increased number of shooting incidents, particularly at night. 
+
+## Modeling Shooting Frequency As A Function of Month and Hour of Day
+
+For the modeling portion of this assignment I fit a linear regression model on the month, hour of the day and month/hour together to predict the number of shooting incidents.  
+
+The output of each model shows how easily and effectively you can fit the data to each of the different time scales. On the level of shootings per month, which I think is actually a very coarse and granular way to look at the data, you can't really predict the number of shooting incidents very well (Adjusted R-Squared = 0.157). 
+
+```{r month model, echo=TRUE, message=FALSE}
+model <- lm(count ~ month, data = month_counts)
+summary(model)
+
+```
+Modeling the number of shootings by the hour of the day (below) produces a similarly weak correlation (Adjusted R-Squared = 0.1626). The poor performance of both models is likely because the shooting incident pattern is more U-shaped throughout the day and across the months of the year, and less conducive to fitting a linear model. We might have more luck with something like a quadratic model.
+
+```{r hour model, echo=TRUE, message=FALSE}
+model <- lm(count ~ hour, data = hour_counts)
+summary(model)
+
+```
+Finally, we can attempt a multiple regression analysis to predict the number of shooting incidents as a function of both the month and hour of the day they occur. This model performs worst of all (Adjusted R-Squared = 0.0305).
+
+```{r hour and month model, echo=TRUE, message=FALSE}
+
+month_hour_counts <- data %>% group_by(hour, month) %>% summarise(n())
+colnames(month_hour_counts) <- c('hour', 'month', 'count')
+
+model <- lm(count ~ month + hour, data = month_hour_counts)
+summary(model)
+
+```
+
+Better fitting, and thus more interesting, models could be quadratic or other polynomial models capable of fitting non-linear patterns like we see with shooting incident frequency over the course of the day or year. It would also be interesting to use an ARIMA model to model the time series of shooting incidents across the 14-year period. ARIMA models are designed to model periodicity of time series data, which would enable us to predict repeating patterns in shooting incident frequency with much better resolution than a linear regression model.
+
+## Discussion and Conclusions 
+
+Time seems to have a significant influence on the number of shooting incidents, with more shootings occurring in the Summer months of the year and at night. My personal hypothesis is that cold winter weather suppresses shooting incidents just like it does many other aspects of human social interaction. 
+
+Limiting this analysis to only time factors omitted many potential sources of bias, such as those typically present for more subjective attributes in the dataset like sex or race. However, there are still potential biases in the circumstances in which these incidents are reported. For example neighborhoods where gun crime is relatively rare might be more likely to report shooting incidents, whereas shooting incidents in neighborhoods where gun crime is more common may be less likely to be reported. Many people or communities are also less likely to trust the police or seek out their involvement in incidents like this, and thus will be less likely to report shooting incidents when they occur. This could bias the dataset by omitting many shooting incidents that are less likely to be reported in certain circumstances. If we could somehow create a dataset of every shooting incident, and not just those that were reported and recorded by the NYPD, the patterns I've described in this report might turn out differently.
+
+My personal bias here is that I do believe, based on historical patterns such as the "Stop and Frisk" era of aggressive policing by the NYPD, that the NYPD is in many ways biased in how they treat minorities and women compared to white people and men. This could influence how data on race and sex of both the perpetrators and victims of gun crime is recorded. However, because I did not look at race or sex in any aspect of my analysis, I do not believe my personal bias is a factor for the purposes of this report. 
+ 
+If we take the dataset at face value, and we really have no other choice, the potential bias for this analysis is thus limited to any potential inaccuracies in time and date. It's easy to imagine errors occurring when recording the time of shootings, because police may show up many hours after an incident occurs and the people reporting this information may have inexact recollections of the time the actual shooting incidents occurred. But these types of errors should be relatively small and I can think of no reason why they would be biased in any particular direction. Thus the analysis presented here is likely to be relatively unbiased, in the limited area it examines.
+
+Thanks for reading!
+
+-Will Roberts
