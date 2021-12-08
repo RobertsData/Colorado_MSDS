@@ -1,0 +1,209 @@
+---
+title: "COVID-19 Pandemic Deaths/Cases Ratio"
+author: "Will Roberts"
+date: "12/7/2021"
+output: html_document
+---
+
+## Introduction and Data Cleaning Steps
+
+This is an analysis of Covid-19 cases and deaths using publicly available data compiled and published by Johns Hopkins University, one of the leading medical universities in the United States. This dataset is often used or cited by journalists and other researchers because of it's unmatched level of detail and rigor in validating the numbers from numerous sources.
+
+First, we'll load and clean both the US and global Covid-19 confirmed cases and deaths datsets, joining deaths and cases together for easy comparison. 
+
+```{r setup, echo = TRUE}
+# Load Packages For Analysis
+library(tidyverse)
+library(lubridate)
+
+# Load Data Surce URLS
+url_in <- c("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv", "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv",  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv", "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv")
+# For Population and Other Country Info
+UID_FIPS <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv")
+
+# Load US Data
+Cases_US <- read_csv(url_in[1]) %>%  pivot_longer(cols = -c('Province_State', 'Country_Region', 'Lat', 'Long_', 'UID', "iso2", "iso3","code3","FIPS","Admin2", "Combined_Key"),names_to ='date', values_to = 'cases') %>% select(-c('Lat', 'Long_', "iso2", "iso3","code3","FIPS", "UID",  "Combined_Key","Admin2"))  %>% mutate(date = mdy(date)) %>% group_by(Province_State, Country_Region, date) %>% summarize(cases = sum(cases))
+
+Deaths_US <- read_csv(url_in[2]) %>% pivot_longer(cols = -c('Province_State', 'Country_Region', 'Lat', 'Long_', 'UID', "iso2", "iso3","code3","FIPS","Admin2", "Combined_Key", "Population"),names_to ='date', values_to = 'deaths') %>% select(-c('Lat', 'Long_', "iso2", "iso3","code3","FIPS","Admin2", "UID", "Combined_Key"))  %>% mutate(date = mdy(date)) %>% group_by(Province_State, Country_Region, date) %>% summarize(deaths = sum(deaths), Population = sum(Population))
+
+# Join US Data
+us <- Cases_US %>% full_join(Deaths_US) %>% unite("Combined_Key", c("Province_State", "Country_Region"), sep = ", ", na.rm=TRUE, remove=FALSE)%>% filter(cases > 0)
+
+# Load Global Data
+Cases_Global <- read_csv(url_in[3]) %>% pivot_longer(cols = -c("Province/State", "Country/Region", "Lat" , "Long"),names_to ='date', values_to = 'cases') %>% 
+  select(-c('Lat', 'Long')) %>% rename("Province_State" ='Province/State', "Country_Region"="Country/Region") %>% mutate(date = mdy(date)) 
+
+Deaths_Global <- read_csv(url_in[4]) %>% pivot_longer(cols = -c("Province/State", "Country/Region", "Lat" ,  "Long"),names_to ='date', values_to = 'deaths') %>% 
+  select(-c('Lat', 'Long')) %>% rename("Province_State" ='Province/State', "Country_Region"="Country/Region") %>% mutate(date = mdy(date))# %>% unite("Combined_Key", c("Province_State", "Country_Region"), sep = ", ", na.rm=TRUE, remove=FALSE)
+
+# Join Global Data
+global <- Cases_Global %>% full_join(Deaths_Global) %>% left_join(UID_FIPS, by = c("Province_State", "Country_Region")) %>% 
+  select(-c(UID, FIPS, iso2, iso3, code3, Admin2, Lat, Long_, Combined_Key)) %>% unite("Combined_Key", c("Province_State", "Country_Region"), sep = ", ", na.rm=TRUE, remove=FALSE) %>% 
+  select(Province_State, Country_Region, date, cases, deaths, Population, Combined_Key) %>% filter(cases > 0)
+
+```
+
+We can see that this dataset has information on the number of Covid-19 cases and deaths for every state and most territories in the USA for dates beginning in Jan 22, 2020. There's also information on the population of each state to normalize the raw totals by population. Note that number of cases and deaths are the cumulative totals since the start of the pandemic, not new cases.
+
+```{r summary us, include=TRUE, echo=TRUE}
+# Summarise US Data
+summary(us)
+
+```
+
+Next we'll look at the global datsets.
+
+```{r summary global, include=TRUE, echo=TRUE}
+# Summarize Global Data
+summary(global)
+```
+
+We can see here that the Global cases dataset looks much like the US dataset, and contains essentially the same information, within the same date range. The major difference of course is that it contains data for each country in the world, not limited to the USA.
+
+These numbers are cumulative, but for this analysis we'll want to look at new cases and deaths recorded daily, so we'll need to calculate the difference between dates. For this analysis we'll be working with monthly aggregated numbers, so we'll do monthly aggregation of new cases and deaths as well.
+
+```{r add new cases, include=TRUE, echo=TRUE}
+
+# Aggregate US numbers by date
+days_us <- aggregate(cbind(cases, deaths) ~ date, data = us, FUN = sum, na.rm = FALSE)
+
+# Monthly unique identifier
+days_us$date_YM <- format(as.Date(days_us$date, format="%Y-%m-%d"),"%Y-%m")
+
+# Add new diff columns for daily new cases
+new_cases <- diff(days_us$cases)
+new_cases <- c(0,new_cases)
+new_deaths <- diff(days_us$deaths)
+new_deaths <- c(0,new_deaths)
+days_us$new_cases <- new_cases
+days_us$new_deaths <- new_deaths
+
+# Aggregate US numbers by month
+months_us <- aggregate(cbind(new_cases, new_deaths) ~ date_YM, data = days_us, FUN = sum, na.rm = FALSE)
+
+# Aggregate Global numbers by date
+days_global <- aggregate(cbind(cases, deaths) ~ date, data = global, FUN = sum, na.rm = FALSE)
+
+# Monthly unique identifier
+days_global$date_YM <- format(as.Date(days_global$date, format="%Y-%m-%d"),"%Y-%m")
+
+# Add new diff columns for daily new cases
+new_cases <- diff(days_global$cases)
+new_cases <- c(0,new_cases)
+new_deaths <- diff(days_global$deaths)
+new_deaths <- c(0,new_deaths)
+days_global$new_cases <- new_cases
+days_global$new_deaths <- new_deaths
+
+# Aggregate Global numbers by month
+months_global <- aggregate(cbind(new_cases, new_deaths) ~ date_YM, data = days_global, FUN = sum, na.rm = FALSE)
+
+names(months_global)
+```
+
+'date_YM' is our unique aggregated identifier for the year-month combination. Months_us and months_global are our dataframes for looking at new cases and new deaths aggregated by month across all states and countries, respectively.
+
+We now have everything we need to look at the numbers in terms of both new and a cumulative sum of cases and deaths for both US and Global datasets. 
+
+## Deaths/Cases Ratio
+
+Covid-19 is of course a deadly disease, but only a small fraction of the people who catch Covid-19 actually die from it. For this analysis I chose to look at the ratio of deaths to cases. The ratio of deaths to cases can tell us how effectively health systems are managing the pandemic and preventing those that do contract Covid-19 from dying.
+
+Looking at our data, we can see that the ratio of deaths to cases has actually changed quite a bit since the pandemic first began, but has since to a large extent stabilized. We'll start by looking at how this ratio has changed in the USA since the start of the pandemic in January 2020.
+
+```{r us ratio, include=TRUE, echo=TRUE}
+
+# plot death/case ratio for US as a whole
+months_us$dc_ratio <- months_us$new_deaths/months_us$new_cases
+
+# Plot Ratio for US Numbers
+ggplot(data=months_us, aes(x= date_YM, y= dc_ratio, group=1)) + geom_line(stat="identity", color='red') +
+  ggtitle('Deaths/Cases Ratio - USA') + xlab('Month')  + ylab('Deaths/Cases')+theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(0, 0.1)+theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5))
+
+```
+
+From this plot we can see that the highest risk time period to die from Covid-19 once contracting the disease was in April-May 2020. After that the ratio begins to decline and steady at around 0.0125 deaths per confirmed case. Another way to express that is about 1.25% of people confirmed to have Covid-19 die from it. Past the summer of 2020 there are some smaller bumps, but nowhere near the high ratio recorded in the earliest months of the pandemic where nearly 7% of confirmed cases eventually died. 
+
+These high early numbers may be somewhat misleading because the infrastructure for testing for Covid-19 was limited at the beginning of the pandemic. Reduced testing capacity could mean that many cases in these months were never confirmed or recorded. People who were tested during this time period were also more likely to be in a hospital with serious illness, and thus more likely to die after contracting Covid-19. Thus the true population of people infected with Covid-19 may not have been very well represented in testing data from these early months, with a bias towards people who were alrady quite ill.
+
+For comparison we can look at these same numbers for global deaths/cases ratio.
+
+```{r global ratio, include=TRUE, echo=TRUE}
+
+months_global$dc_ratio <- months_global$new_deaths/months_global$new_cases
+# Plot Ratio for Global Numbers
+ggplot(data=months_global, aes(x= date_YM, y= dc_ratio, group=1)) + geom_line(stat="identity", color='green') +
+  ggtitle('Deaths/Cases Ratio - Global') + xlab('')  + ylab('Deaths/Cases')+theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(0, 0.1) +theme(axis.text.x = element_text(angle = 45, vjust = 0.5, hjust=0.5))
+
+
+```
+
+What is remarkable about these two plots is how similar they are. We can see the same pattern of peaks in both global and US deaths/cases ratios in February and June 2021. 
+
+Next we can use some basic linear regression models to see how strong this relationship in deaths/cases ratio really is.
+
+## Regression Models
+
+To add some statistical weight to this observation we can run a simple linear regression model on the two datasets to see the strength of their relationship. 
+
+```{r first model, include=TRUE, echo=TRUE}
+# Plot regression model looking at death/case ratio between USA and Global
+
+model <- lm(months_us$dc_ratio ~ months_global$dc_ratio)
+summary(model)
+
+```
+
+The relationship is surprisingly strong, with an adjusted R-Squared value of 0.7153. This is somewhat surprising because, due to the high per-capita income in the USA, I would have expected Covid-19 patients to be less likely to die there compared to the global average. Possible reasons for this high correlation could be that effective treatments for Covid-19 have not really been available to anyone until relatively recently, including high-income countries like the US. There could also be disparities in how well these statistics are tracked in different parts of the world that would skew the numbers. 
+
+The global dataset actually includes the US, so let's run the model again with the US excluded to see if that changes the statistical relationship. My guess is it will almost certainly have a lower adjusted R-squaed.
+
+```{r second model , include=TRUE, echo=TRUE}
+# Plot regression model looking at death/case ratio between USA and Global
+# Aggregate Global numbers by date
+global_no_us <- global[ which(global$Country_Region!='US'),]
+days_global_no_us <- aggregate(cbind(cases, deaths) ~ date, data = global_no_us, FUN = sum, na.rm = FALSE)
+
+# Monthly unique identifier
+days_global_no_us$date_YM <- format(as.Date(days_global_no_us$date, format="%Y-%m-%d"),"%Y-%m")
+
+# Add new diff columns for daily new cases
+new_cases <- diff(days_global_no_us$cases)
+new_cases <- c(0,new_cases)
+new_deaths <- diff(days_global_no_us$deaths)
+new_deaths <- c(0,new_deaths)
+days_global_no_us$new_cases <- new_cases
+days_global_no_us$new_deaths <- new_deaths
+
+months_global_no_us <- aggregate(cbind(new_cases, new_deaths) ~ date_YM, data = days_global_no_us, FUN = sum, na.rm = FALSE)
+months_global_no_us$dc_ratio <- months_global_no_us$new_deaths/months_global_no_us$new_cases
+
+model <- lm(months_us$dc_ratio ~ months_global_no_us$dc_ratio)
+summary(model)
+
+```
+
+We can see that the Adjusted R-Squared value has decreased to 0.6348. This is not at all surprising, because data is of course always perfectly correlated with itself. This is still a high R-Squared value, and suggests that the factors and trends driving the deaths/cases ratio are broadly similar across the globe.
+
+## Conclusion
+
+The number of people who die from Covid-19 after contracting it appears to have settled into a narrow rang of around 0.0125 deaths per confirmed case. Somewhat surprisingly, this ratio has been broadly similar between the United states and the global average ratio of the rest of the world since the pandemic began, though there are many reasons to suspect that the data is at least a little biased.
+
+One very large source of potential bias in these datsets is the variable reporting of cases and deaths over time, either because of limited resources or testing capacity, or intentional manipulation of the data. Examples of government officials manipulating covid-19 data include New York state under-reporting Covid-19 deaths in nursing homes in 2020, the Russian government continually mis- and under-reporting Covid-19 deaths and cases since the start of the pandemic, and even North Korea which still claims to not have had a single Covid-19 case. 
+
+Many lower income countries may simply lack the resources to accurately track the number of cases and deaths occurring throughout their country. Disruptive events such as political instability, war, refugee migrations and natural disasters will also make accurate reporting of Covid-19 cases and deaths nearly impossible when and where they occur. Countries experiencing these issues will likely chronically under-report Covid-19 cases and deaths, with no real way to remedy the situation.
+
+My own personal bias is that I do believe the severity of the pandemic has been downplayed by many organizations, government or otherwise, for political reasons. In my home country of the United States the severity and public response to the covid-19 pandemic has become a toxic political issue fueled by misinformation and conspiracy theories, with similar situations occurring right now in some European countries as their governments seek to impose stronger vaccine mandates and partial lockdowns. As a result of the intense politicization of the Covid-19 pandemic, it has become nearly impossible to view it dispassionately through a non-partisan lens. However, because no aspect of my analysis directly involved politics, public opinion or the influence of government-imposed health measures I do not believe my personal biases are a factor in the analysis.
+
+As we move into 2022, the covid-19 pandemic continues to cause severe illness, suffering and death on a massive scale all around the world. Though vaccines and other treatments are now widely available in many countries, much of the world still lacks access to them. The wealth of data available for this pandemic has proven to be a valuable resource in fighting to contain the severity of the pandemic, though the fight is far from over. We're using these numbers for our class project, but behind these stats are real people who have become ill and/or died of Covid-19. It's impossible to truly grasp the sheer amount of human suffering Covid-19 has created, and it still going on nearly two years later. 
+
+Thank you for reading.
+
+-Will Roberts
+
+
+
+
+
