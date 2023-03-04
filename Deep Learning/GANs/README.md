@@ -1,9 +1,9 @@
 ## About The Project
 
-This project was for Week 4 of the UC Boulder Course 'Introduction to Deep Learning'
+This project was for Week 5 of the UC Boulder Course 'Introduction to Deep Learning'
 
-Follows this Kaggle competition classifying BBC Tweets:
-https://github.com/RobertsData/Colorado_MSDS/tree/master/Deep%20Learning/BBC%20Disaster%20Tweets
+Follows this Kaggle competition for doing Style Transfer of Monet Paintings to Test Images:
+https\://www.kaggle.com/competitions/gan-getting-started/overview
 
 
 ## Contact
